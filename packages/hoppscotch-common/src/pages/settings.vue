@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="container divide-y divide-dividerLight">
-      <div class="md:grid md:gap-4 md:grid-cols-3">
+      <div class="md:grid md:grid-cols-3 md:gap-4">
         <div class="p-8 md:col-span-1">
           <h3 class="heading">
             {{ t("settings.theme") }}
@@ -10,7 +10,7 @@
             {{ t("settings.theme_description") }}
           </p>
         </div>
-        <div class="p-8 space-y-8 md:col-span-2">
+        <div class="space-y-8 p-8 md:col-span-2">
           <section>
             <h4 class="font-semibold text-secondaryDark">
               {{ t("settings.background") }}
@@ -57,7 +57,7 @@
                 :label="t('app.contact_us')"
               />.
             </div>
-            <div class="py-4 space-y-4">
+            <div class="space-y-4 py-4">
               <div class="flex items-center">
                 <HoppSmartToggle
                   v-if="hasPlatformTelemetry"
@@ -83,12 +83,20 @@
                   {{ t("settings.sidebar_on_left") }}
                 </HoppSmartToggle>
               </div>
+              <div v-if="hasAIExperimentsSupport" class="flex items-center">
+                <HoppSmartToggle
+                  :on="ENABLE_AI_EXPERIMENTS"
+                  @change="toggleSetting('ENABLE_AI_EXPERIMENTS')"
+                >
+                  {{ t("settings.ai_experiments") }}
+                </HoppSmartToggle>
+              </div>
             </div>
           </section>
         </div>
       </div>
 
-      <div class="md:grid md:gap-4 md:grid-cols-3">
+      <div class="md:grid md:grid-cols-3 md:gap-4">
         <div class="p-8 md:col-span-1">
           <h3 class="heading">
             {{ t("settings.interceptor") }}
@@ -97,7 +105,13 @@
             {{ t("settings.interceptor_description") }}
           </p>
         </div>
-        <div class="p-8 space-y-8 md:col-span-2">
+        <div class="space-y-8 p-8 md:col-span-2">
+          <section class="flex flex-col space-y-2">
+            <h4 class="font-semibold text-secondaryDark">
+              {{ t("settings.interceptor") }}
+            </h4>
+            <AppInterceptor :is-tooltip-component="false" />
+          </section>
           <section v-for="[id, settings] in interceptorsWithSettings" :key="id">
             <h4 class="font-semibold text-secondaryDark">
               {{ settings.entryTitle(t) }}
@@ -106,6 +120,15 @@
           </section>
         </div>
       </div>
+
+      <template v-if="platform.ui?.additionalSettingsSections?.length">
+        <template
+          v-for="item in platform.ui?.additionalSettingsSections"
+          :key="item.id"
+        >
+          <component :is="item" />
+        </template>
+      </template>
     </div>
     <HoppSmartConfirmModal
       :show="confirmRemove"
@@ -164,6 +187,7 @@ const PROXY_URL = useSetting("PROXY_URL")
 const TELEMETRY_ENABLED = useSetting("TELEMETRY_ENABLED")
 const EXPAND_NAVIGATION = useSetting("EXPAND_NAVIGATION")
 const SIDEBAR_ON_LEFT = useSetting("SIDEBAR_ON_LEFT")
+const ENABLE_AI_EXPERIMENTS = useSetting("ENABLE_AI_EXPERIMENTS")
 
 const hasPlatformTelemetry = Boolean(platform.platformFeatureFlags.hasTelemetry)
 
@@ -172,6 +196,9 @@ const confirmRemove = ref(false)
 const proxySettings = computed(() => ({
   url: PROXY_URL.value,
 }))
+
+const hasAIExperimentsSupport =
+  !!platform.experiments?.aiExperiments?.enableAIExperiments
 
 watch(
   proxySettings,

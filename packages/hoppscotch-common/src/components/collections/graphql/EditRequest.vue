@@ -6,13 +6,28 @@
     @close="hideModal"
   >
     <template #body>
-      <HoppSmartInput
-        v-model="requestUpdateData.name"
-        placeholder=" "
-        :label="t('action.label')"
-        input-styles="floating-input"
-        @submit="saveRequest"
-      />
+      <div class="flex gap-1">
+        <HoppSmartInput
+          v-model="editingName"
+          class="flex-grow"
+          placeholder=" "
+          :label="t('action.label')"
+          input-styles="floating-input"
+          @submit="saveRequest"
+        />
+        <HoppButtonSecondary
+          v-if="canDoRequestNameGeneration"
+          v-tippy="{ theme: 'tooltip' }"
+          :icon="IconSparkle"
+          :disabled="isGenerateRequestNamePending"
+          class="rounded-md"
+          :class="{
+            'animate-pulse': isGenerateRequestNamePending,
+          }"
+          :title="t('ai_experiments.generate_request_name')"
+          @click="generateRequestName"
+        />
+      </div>
     </template>
     <template #footer>
       <span class="flex space-x-2">
@@ -32,61 +47,64 @@
   </HoppSmartModal>
 </template>
 
-<script lang="ts">
-import { defineComponent, PropType } from "vue"
+<script setup lang="ts">
 import { useI18n } from "@composables/i18n"
 import { useToast } from "@composables/toast"
 import { HoppGQLRequest } from "@hoppscotch/data"
+import { ref, watch } from "vue"
+import { useRequestNameGeneration } from "~/composables/ai-experiments"
 import { editGraphqlRequest } from "~/newstore/collections"
+import IconSparkle from "~icons/lucide/sparkles"
 
-export default defineComponent({
-  props: {
-    show: Boolean,
-    folderPath: { type: String, default: null },
-    request: { type: Object as PropType<HoppGQLRequest>, default: () => ({}) },
-    requestIndex: { type: Number, default: null },
-    editingRequestName: { type: String, default: null },
-  },
-  emits: ["hide-modal"],
-  setup() {
-    return {
-      toast: useToast(),
-      t: useI18n(),
-    }
-  },
-  data() {
-    return {
-      requestUpdateData: {
-        name: null as any | null,
-      },
-    }
-  },
-  watch: {
-    editingRequestName(val) {
-      this.requestUpdateData.name = val
-    },
-  },
-  methods: {
-    saveRequest() {
-      if (!this.requestUpdateData.name) {
-        this.toast.error(`${this.t("collection.invalid_name")}`)
-        return
-      }
+const t = useI18n()
+const toast = useToast()
 
-      // TODO: Type safety goes brrrr. Proper typing plz
-      const requestUpdated = {
-        ...this.$props.request,
-        name: this.$data.requestUpdateData.name || this.$props.request.name,
-      }
+const props = defineProps<{
+  show: boolean
+  folderPath?: string
+  requestIndex: number | null
+  request: HoppGQLRequest | null
+  editingRequestName: string
+  requestContext: HoppGQLRequest | null
+}>()
 
-      editGraphqlRequest(this.folderPath, this.requestIndex, requestUpdated)
+const emit = defineEmits<{
+  (e: "hide-modal"): void
+}>()
 
-      this.hideModal()
-    },
-    hideModal() {
-      this.requestUpdateData = { name: null }
-      this.$emit("hide-modal")
-    },
-  },
-})
+const editingName = ref("")
+
+watch(
+  () => props.editingRequestName,
+  (val) => {
+    editingName.value = val
+  }
+)
+
+const {
+  canDoRequestNameGeneration,
+  generateRequestName,
+  isGenerateRequestNamePending,
+} = useRequestNameGeneration(editingName)
+
+const saveRequest = () => {
+  if (!editingName.value) {
+    toast.error(`${t("collection.invalid_name")}`)
+    return
+  }
+
+  const requestUpdated = {
+    ...(props.request as any),
+    name: editingName.value || (props.request as any).name,
+  }
+
+  editGraphqlRequest(props.folderPath, props.requestIndex, requestUpdated)
+
+  hideModal()
+}
+
+const hideModal = () => {
+  editingName.value = ""
+  emit("hide-modal")
+}
 </script>

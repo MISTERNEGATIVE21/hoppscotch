@@ -1,5 +1,6 @@
 import { GQLHeader, HoppGQLAuth, makeGQLRequest } from "@hoppscotch/data"
 import { OperationType } from "@urql/core"
+import { AwsV4Signer } from "aws4fetch"
 import * as E from "fp-ts/Either"
 import {
   GraphQLEnumType,
@@ -11,8 +12,9 @@ import {
   getIntrospectionQuery,
   printSchema,
 } from "graphql"
-import { computed, reactive, ref } from "vue"
+import { Component, computed, reactive, ref } from "vue"
 import { getService } from "~/modules/dioc"
+import { getI18n } from "~/modules/i18n"
 
 import { addGraphqlHistoryEntry, makeGQLHistoryEntry } from "~/newstore/history"
 
@@ -32,13 +34,23 @@ type RunQueryOptions = {
   operationType: OperationType
 }
 
-export type GQLResponseEvent = {
-  time: number
-  operationName: string | undefined
-  operationType: OperationType
-  data: string
-  rawQuery?: RunQueryOptions
-}
+export type GQLResponseEvent =
+  | {
+      type: "response"
+      time: number
+      operationName: string | undefined
+      operationType: OperationType
+      data: string
+      rawQuery?: RunQueryOptions
+    }
+  | {
+      type: "error"
+      error: {
+        type: string
+        message: string
+        component?: Component
+      }
+    }
 
 export type ConnectionState = "CONNECTING" | "CONNECTED" | "DISCONNECTED"
 export type SubscriptionState = "SUBSCRIBING" | "SUBSCRIBED" | "UNSUBSCRIBED"
@@ -61,6 +73,11 @@ type Connection = {
   subscriptionState: Map<string, SubscriptionState>
   socket: WebSocket | undefined
   schema: GraphQLSchema | null
+  error?: {
+    type: string
+    message: (t: ReturnType<typeof getI18n>) => string
+    component?: Component
+  } | null
 }
 
 const tabs = getService(GQLTabService)
@@ -71,6 +88,7 @@ export const connection = reactive<Connection>({
   subscriptionState: new Map<string, SubscriptionState>(),
   socket: undefined,
   schema: null,
+  error: null,
 })
 
 export const schema = computed(() => connection.schema)
@@ -202,7 +220,19 @@ const getSchema = async (url: string, headers: GQLHeader[]) => {
     const res = await interceptorService.runRequest(reqOptions).response
 
     if (E.isLeft(res)) {
-      console.error(res.left)
+      if (
+        res.left !== "cancellation" &&
+        res.left.error === "NO_PW_EXT_HOOK" &&
+        res.left.humanMessage
+      ) {
+        connection.error = {
+          type: res.left.error,
+          message: (t: ReturnType<typeof getI18n>) =>
+            res.left.humanMessage.description(t),
+          component: res.left.component,
+        }
+      }
+
       throw new Error(res.left.toString())
     }
 
@@ -218,6 +248,7 @@ const getSchema = async (url: string, headers: GQLHeader[]) => {
     const schema = buildClientSchema(introspectResponse.data)
 
     connection.schema = schema
+    connection.error = null
   } catch (e: any) {
     console.error(e)
     disconnect()
@@ -239,14 +270,51 @@ export const runGQLOperation = async (options: RunQueryOptions) => {
       const username = auth.username
       const password = auth.password
       finalHeaders.Authorization = `Basic ${btoa(`${username}:${password}`)}`
-    } else if (auth.authType === "bearer" || auth.authType === "oauth-2") {
+    } else if (auth.authType === "bearer") {
       finalHeaders.Authorization = `Bearer ${auth.token}`
+    } else if (auth.authType === "oauth-2") {
+      const { addTo } = auth
+
+      if (addTo === "HEADERS") {
+        finalHeaders.Authorization = `Bearer ${auth.grantTypeInfo.token}`
+      } else if (addTo === "QUERY_PARAMS") {
+        params["access_token"] = auth.grantTypeInfo.token
+      }
     } else if (auth.authType === "api-key") {
       const { key, value, addTo } = auth
-      if (addTo === "Headers") {
+      if (addTo === "HEADERS") {
         finalHeaders[key] = value
-      } else if (addTo === "Query params") {
+      } else if (addTo === "QUERY_PARAMS") {
         params[key] = value
+      }
+    } else if (auth.authType === "aws-signature") {
+      const { accessKey, secretKey, region, serviceName, addTo, serviceToken } =
+        auth
+
+      const currentDate = new Date()
+      const amzDate = currentDate.toISOString().replace(/[:-]|\.\d{3}/g, "")
+
+      const signer = new AwsV4Signer({
+        datetime: amzDate,
+        signQuery: addTo === "QUERY_PARAMS",
+        accessKeyId: accessKey,
+        secretAccessKey: secretKey,
+        region: region ?? "us-east-1",
+        service: serviceName,
+        url,
+        sessionToken: serviceToken,
+      })
+
+      const sign = await signer.sign()
+
+      if (addTo === "HEADERS") {
+        sign.headers.forEach((v, k) => {
+          finalHeaders[k] = v
+        })
+      } else if (addTo === "QUERY_PARAMS") {
+        for (const [k, v] of sign.url.searchParams) {
+          params[k] = v
+        }
       }
     }
   }
@@ -280,7 +348,18 @@ export const runGQLOperation = async (options: RunQueryOptions) => {
   const result = await interceptorService.runRequest(reqOptions).response
 
   if (E.isLeft(result)) {
-    console.error(result.left)
+    if (
+      result.left !== "cancellation" &&
+      result.left.error === "NO_PW_EXT_HOOK" &&
+      result.left.humanMessage
+    ) {
+      connection.error = {
+        type: result.left.error,
+        message: (t: ReturnType<typeof getI18n>) =>
+          result.left.humanMessage.description(t),
+        component: result.left.component,
+      }
+    }
     throw new Error(result.left.toString())
   }
 
@@ -292,11 +371,16 @@ export const runGQLOperation = async (options: RunQueryOptions) => {
     .replace(/\0+$/, "")
 
   gqlMessageEvent.value = {
+    type: "response",
     time: Date.now(),
     operationName: operationName ?? "query",
     data: responseText,
     rawQuery: options,
     operationType,
+  }
+
+  if (connection.state !== "CONNECTED") {
+    connection.state = "CONNECTED"
   }
 
   addQueryToHistory(options, responseText)
@@ -352,6 +436,7 @@ export const runSubscription = (
       }
       case GQL.DATA: {
         gqlMessageEvent.value = {
+          type: "response",
           time: Date.now(),
           operationName,
           data: JSON.stringify(data.payload),

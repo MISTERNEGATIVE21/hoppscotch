@@ -1,4 +1,4 @@
-import { authEvents$, def as platformAuth } from "@platform/auth"
+import { authEvents$, def as platformAuth } from "@platform/auth/auth.platform"
 import { CollectionsPlatformDef } from "@hoppscotch/common/platform/collections"
 import { runDispatchWithOutSyncing } from "../../lib/sync"
 
@@ -48,8 +48,11 @@ import {
 } from "@hoppscotch/common/newstore/collections"
 import { runGQLSubscription } from "@hoppscotch/common/helpers/backend/GQLClient"
 import {
+  GQLHeader,
   HoppCollection,
   HoppGQLRequest,
+  HoppRESTHeaders,
+  HoppRESTParam,
   HoppRESTRequest,
 } from "@hoppscotch/data"
 import { gqlCollectionsSyncer } from "./gqlCollections.sync"
@@ -89,6 +92,7 @@ type ExportedUserCollectionREST = {
   folders: ExportedUserCollectionREST[]
   requests: Array<HoppRESTRequest & { id: string }>
   name: string
+  data: string
 }
 
 type ExportedUserCollectionGQL = {
@@ -96,26 +100,49 @@ type ExportedUserCollectionGQL = {
   folders: ExportedUserCollectionGQL[]
   requests: Array<HoppGQLRequest & { id: string }>
   name: string
+  data: string
+}
+
+function addDescriptionField(
+  candidate: HoppRESTHeaders | GQLHeader[] | HoppRESTParam[]
+) {
+  return candidate.map((item) => ({
+    ...item,
+    description: "description" in item ? item.description : "",
+  }))
 }
 
 function exportedCollectionToHoppCollection(
   collection: ExportedUserCollectionREST | ExportedUserCollectionGQL,
   collectionType: "REST" | "GQL"
-): HoppCollection<HoppRESTRequest | HoppGQLRequest> {
+): HoppCollection {
   if (collectionType == "REST") {
     const restCollection = collection as ExportedUserCollectionREST
 
+    const data =
+      restCollection.data && restCollection.data !== "null"
+        ? JSON.parse(restCollection.data)
+        : {
+            auth: { authType: "inherit", authActive: false },
+            headers: [],
+          }
+
     return {
       id: restCollection.id,
-      v: 1,
+      v: 3,
       name: restCollection.name,
       folders: restCollection.folders.map((folder) =>
         exportedCollectionToHoppCollection(folder, collectionType)
       ),
-      requests: restCollection.requests.map(
-        ({
-          id,
+      requests: restCollection.requests.map((request) => {
+        const requestParsedResult = HoppRESTRequest.safeParse(request)
+        if (requestParsedResult.type === "ok") {
+          return requestParsedResult.value
+        }
+
+        const {
           v,
+          id,
           auth,
           body,
           endpoint,
@@ -125,40 +152,71 @@ function exportedCollectionToHoppCollection(
           params,
           preRequestScript,
           testScript,
-        }) => ({
-          id,
+          requestVariables,
+        } = request
+
+        const resolvedParams = addDescriptionField(params)
+        const resolvedHeaders = addDescriptionField(headers)
+
+        return {
           v,
-          auth,
-          body,
-          endpoint,
-          headers,
-          method,
+          id,
           name,
-          params,
+          endpoint,
+          method,
+          params: resolvedParams,
+          requestVariables,
+          auth,
+          headers: resolvedHeaders,
+          body,
           preRequestScript,
           testScript,
-        })
-      ),
+        }
+      }),
+      auth: data.auth,
+      headers: addDescriptionField(data.headers),
     }
   } else {
     const gqlCollection = collection as ExportedUserCollectionGQL
 
+    const data =
+      gqlCollection.data && gqlCollection.data !== "null"
+        ? JSON.parse(gqlCollection.data)
+        : {
+            auth: { authType: "inherit", authActive: false },
+            headers: [],
+          }
+
     return {
       id: gqlCollection.id,
-      v: 1,
+      v: 3,
       name: gqlCollection.name,
       folders: gqlCollection.folders.map((folder) =>
         exportedCollectionToHoppCollection(folder, collectionType)
       ),
-      requests: gqlCollection.requests.map(
-        ({ v, auth, headers, name, id }) => ({
+      requests: gqlCollection.requests.map((request) => {
+        const requestParsedResult = HoppGQLRequest.safeParse(request)
+        if (requestParsedResult.type === "ok") {
+          return requestParsedResult.value
+        }
+
+        const { v, auth, headers, name, id, query, url, variables } = request
+
+        const resolvedHeaders = addDescriptionField(headers)
+
+        return {
           id,
           v,
           auth,
-          headers,
+          headers: resolvedHeaders,
           name,
-        })
-      ) as HoppGQLRequest[],
+          query,
+          url,
+          variables,
+        }
+      }),
+      auth: data.auth,
+      headers: addDescriptionField(data.headers),
     }
   }
 }
@@ -168,7 +226,6 @@ async function loadUserCollections(collectionType: "REST" | "GQL") {
     undefined,
     collectionType == "REST" ? ReqType.Rest : ReqType.Gql
   )
-
   if (E.isRight(res)) {
     const collectionsJSONString =
       res.right.exportUserCollectionsToJSON.exportedCollection
@@ -177,7 +234,6 @@ async function loadUserCollections(collectionType: "REST" | "GQL") {
         ExportedUserCollectionGQL | ExportedUserCollectionREST
       >
     ).map((collection) => ({ v: 1, ...collection }))
-
     runDispatchWithOutSyncing(() => {
       collectionType == "REST"
         ? setRESTCollections(
@@ -186,7 +242,7 @@ async function loadUserCollections(collectionType: "REST" | "GQL") {
                 exportedCollectionToHoppCollection(
                   collection,
                   "REST"
-                ) as HoppCollection<HoppRESTRequest>
+                ) as HoppCollection
             )
           )
         : setGraphqlCollections(
@@ -195,7 +251,7 @@ async function loadUserCollections(collectionType: "REST" | "GQL") {
                 exportedCollectionToHoppCollection(
                   collection,
                   "GQL"
-                ) as HoppCollection<HoppGQLRequest>
+                ) as HoppCollection
             )
           )
     })
@@ -256,6 +312,20 @@ function setupUserCollectionCreatedSubscription() {
         return
       }
 
+      // While duplicating a collection, the new entry added to the store has an ID with a suffix to be updated after the backend ID is received from the GQL subscription
+      // This is to prevent the new entry from being added to the store again when the GQL subscription
+      // The boolean return value indicates if the GQL subscription was fired because of a duplicate collection action and whether the collection should be added to the store
+      const shouldCreateCollection = issueBackendIDToDuplicatedCollection(
+        collectionStore,
+        collectionType,
+        userCollectionBackendID,
+        parentCollectionID
+      )
+
+      if (!shouldCreateCollection) {
+        return
+      }
+
       const parentCollectionPath =
         parentCollectionID &&
         getCollectionPathFromCollectionID(
@@ -292,19 +362,32 @@ function setupUserCollectionCreatedSubscription() {
         })
       } else {
         // root collections won't have parentCollectionID
+        const data =
+          res.right.userCollectionCreated.data &&
+          res.right.userCollectionCreated.data != "null"
+            ? JSON.parse(res.right.userCollectionCreated.data)
+            : {
+                auth: { authType: "inherit", authActive: false },
+                headers: [],
+              }
+
         runDispatchWithOutSyncing(() => {
           collectionType == "GQL"
             ? addGraphqlCollection({
                 name: res.right.userCollectionCreated.title,
                 folders: [],
                 requests: [],
-                v: 1,
+                v: 3,
+                auth: data.auth,
+                headers: addDescriptionField(data.headers),
               })
             : addRESTCollection({
                 name: res.right.userCollectionCreated.title,
                 folders: [],
                 requests: [],
-                v: 1,
+                v: 3,
+                auth: data.auth,
+                headers: addDescriptionField(data.headers),
               })
 
           const localIndex = collectionStore.value.state.length - 1
@@ -718,7 +801,7 @@ export const def: CollectionsPlatformDef = {
 
 function getCollectionPathFromCollectionID(
   collectionID: string,
-  collections: HoppCollection<HoppRESTRequest | HoppGQLRequest>[],
+  collections: HoppCollection[],
   parentPath?: string
 ): string | null {
   for (const collectionIndex in collections) {
@@ -742,7 +825,7 @@ function getCollectionPathFromCollectionID(
 
 function getRequestPathFromRequestID(
   requestID: string,
-  collections: HoppCollection<HoppRESTRequest | HoppGQLRequest>[],
+  collections: HoppCollection[],
   parentPath?: string
 ): { collectionPath: string; requestIndex: number } | null {
   for (const collectionIndex in collections) {
@@ -774,7 +857,7 @@ function getRequestPathFromRequestID(
 function getRequestIndex(
   requestID: string,
   parentCollectionPath: string,
-  collections: HoppCollection<HoppRESTRequest | HoppGQLRequest>[]
+  collections: HoppCollection[]
 ) {
   const collection = navigateToFolderWithIndexPath(
     collections,
@@ -786,4 +869,106 @@ function getRequestIndex(
   )
 
   return requestIndex
+}
+
+function issueBackendIDToDuplicatedCollection(
+  collectionStore: ReturnType<
+    typeof getStoreByCollectionType
+  >["collectionStore"],
+  collectionType: ReqType,
+  userCollectionBackendID: string,
+  parentCollectionID?: string
+): boolean {
+  // Collection added to store via duplicating is set an ID with a suffix to be updated after the backend ID is received from the GQL subscription
+  const collectionCreatedFromStoreIDSuffix = "-duplicate-collection"
+
+  // Duplicating a child collection
+  if (parentCollectionID) {
+    // Get the index path for the parent collection
+    const parentCollectionPath = getCollectionPathFromCollectionID(
+      parentCollectionID,
+      collectionStore.value.state
+    )
+
+    if (!parentCollectionPath) {
+      // Indicates the collection received from the GQL subscription should be created in the store
+      return true
+    }
+
+    const parentCollection = navigateToFolderWithIndexPath(
+      collectionStore.value.state,
+      parentCollectionPath.split("/").map((index) => parseInt(index))
+    )
+
+    if (!parentCollection) {
+      // Indicates the collection received from the GQL subscription should be created in the store
+      return true
+    }
+
+    // Grab the child collection inserted via store update with the ID suffix
+    const collectionInsertedViaStoreUpdateIdx =
+      parentCollection.folders.findIndex(({ id }) =>
+        id?.endsWith(collectionCreatedFromStoreIDSuffix)
+      )
+
+    // No entry indicates the GQL subscription was fired not because of a duplicate collection action
+    if (collectionInsertedViaStoreUpdateIdx === -1) {
+      // Indicates the collection received from the GQL subscription should be created in the store
+      return true
+    }
+    const collectionInsertedViaStoreUpdate =
+      parentCollection.folders[collectionInsertedViaStoreUpdateIdx]
+
+    const childCollectionPath = `${parentCollectionPath}/${collectionInsertedViaStoreUpdateIdx}`
+
+    // Update the ID for the child collection already existing in store with the backend ID
+    runDispatchWithOutSyncing(() => {
+      if (collectionType == ReqType.Rest) {
+        editRESTFolder(childCollectionPath, {
+          ...collectionInsertedViaStoreUpdate,
+          id: userCollectionBackendID,
+        })
+      } else {
+        editGraphqlFolder(childCollectionPath, {
+          ...collectionInsertedViaStoreUpdate,
+          id: userCollectionBackendID,
+        })
+      }
+    })
+  } else {
+    // Duplicating a root collection
+
+    // Grab the collection inserted via store update with the ID suffix
+    const collectionInsertedViaStoreUpdateIdx =
+      collectionStore.value.state.findIndex(({ id }) =>
+        id?.endsWith(collectionCreatedFromStoreIDSuffix)
+      )
+
+    // No entry indicates the GQL subscription was fired not because of a duplicate collection action
+    if (collectionInsertedViaStoreUpdateIdx === -1) {
+      // Indicates the collection received from the GQL subscription should be created in the store
+      return true
+    }
+
+    const collectionInsertedViaStoreUpdate =
+      collectionStore.value.state[collectionInsertedViaStoreUpdateIdx]
+
+    // Update the ID for the collection already existing in store with the backend ID
+    runDispatchWithOutSyncing(() => {
+      if (collectionType == ReqType.Rest) {
+        editRESTCollection(collectionInsertedViaStoreUpdateIdx, {
+          ...collectionInsertedViaStoreUpdate,
+          id: userCollectionBackendID,
+        })
+      } else {
+        editGraphqlCollection(collectionInsertedViaStoreUpdateIdx, {
+          ...collectionInsertedViaStoreUpdate,
+          id: userCollectionBackendID,
+        })
+      }
+    })
+  }
+
+  // Prevent adding the collection received from GQL subscription to the store
+  return false
 }

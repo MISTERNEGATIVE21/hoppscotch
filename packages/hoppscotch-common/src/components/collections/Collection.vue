@@ -12,16 +12,16 @@
       @dragleave="ordering = false"
       @dragend="resetDragState"
     ></div>
-    <div class="flex flex-col relative">
+    <div class="relative flex flex-col">
       <div
-        class="absolute bg-accent opacity-0 pointer-events-none inset-0 z-1 transition"
+        class="z-[1] pointer-events-none absolute inset-0 bg-accent opacity-0 transition"
         :class="{
           'opacity-25':
             dragging && notSameDestination && notSameParentDestination,
         }"
       ></div>
       <div
-        class="flex items-stretch group relative z-3 cursor-pointer pointer-events-auto"
+        class="z-[3] group pointer-events-auto relative flex cursor-pointer items-stretch"
         :draggable="!hasNoTeamAccess"
         @dragstart="dragStart"
         @drop="handelDrop($event)"
@@ -33,14 +33,14 @@
             dropItemID = ''
           }
         "
-        @contextmenu.prevent="options?.tippy.show()"
+        @contextmenu.prevent="options?.tippy?.show()"
       >
         <div
-          class="flex items-center justify-center flex-1 min-w-0"
+          class="flex min-w-0 flex-1 items-center justify-center"
           @click="emit('toggle-children')"
         >
           <span
-            class="flex items-center justify-center px-4 pointer-events-none"
+            class="pointer-events-none flex items-center justify-center px-4"
           >
             <HoppSmartSpinner v-if="isCollLoading" />
             <component
@@ -51,7 +51,7 @@
             />
           </span>
           <span
-            class="flex flex-1 min-w-0 py-2 pr-2 transition pointer-events-none group-hover:text-secondaryDark"
+            class="pointer-events-none flex min-w-0 flex-1 py-2 pr-2 transition group-hover:text-secondaryDark"
           >
             <span class="truncate" :class="{ 'text-accent': isSelected }">
               {{ collectionName }}
@@ -72,6 +72,14 @@
             :title="t('folder.new')"
             class="hidden group-hover:inline-flex"
             @click="emit('add-folder')"
+          />
+          <HoppButtonSecondary
+            v-if="collectionsType === 'team-collections'"
+            v-tippy="{ theme: 'tooltip' }"
+            :icon="IconPlaySquare"
+            :title="t('collection_runner.run_collection')"
+            class="hidden group-hover:inline-flex"
+            @click="emit('run-collection', props.id)"
           />
           <span>
             <tippy
@@ -94,8 +102,15 @@
                   @keyup.r="requestAction?.$el.click()"
                   @keyup.n="folderAction?.$el.click()"
                   @keyup.e="edit?.$el.click()"
+                  @keyup.d="
+                    showDuplicateCollectionAction
+                      ? duplicateAction?.$el.click()
+                      : null
+                  "
                   @keyup.delete="deleteAction?.$el.click()"
                   @keyup.x="exportAction?.$el.click()"
+                  @keyup.p="propertiesAction?.$el.click()"
+                  @keyup.t="runCollectionAction?.$el.click()"
                   @keyup.escape="hide()"
                 >
                   <HoppSmartItem
@@ -135,6 +150,20 @@
                     "
                   />
                   <HoppSmartItem
+                    v-if="showDuplicateCollectionAction"
+                    ref="duplicateAction"
+                    :icon="IconCopy"
+                    :label="t('action.duplicate')"
+                    :loading="duplicateCollectionLoading"
+                    :shortcut="['D']"
+                    @click="
+                      () => {
+                        emit('duplicate-collection'),
+                          collectionsType === 'my-collections' ? hide() : null
+                      }
+                    "
+                  />
+                  <HoppSmartItem
                     ref="exportAction"
                     :icon="IconDownload"
                     :label="t('export.title')"
@@ -155,6 +184,31 @@
                     @click="
                       () => {
                         emit('remove-collection')
+                        hide()
+                      }
+                    "
+                  />
+                  <HoppSmartItem
+                    ref="propertiesAction"
+                    :icon="IconSettings2"
+                    :label="t('action.properties')"
+                    :shortcut="['P']"
+                    @click="
+                      () => {
+                        emit('edit-properties')
+                        hide()
+                      }
+                    "
+                  />
+                  <HoppSmartItem
+                    v-if="collectionsType === 'team-collections'"
+                    ref="runCollectionAction"
+                    :icon="IconPlaySquare"
+                    :label="t('collection_runner.run_collection')"
+                    :shortcut="['T']"
+                    @click="
+                      () => {
+                        emit('run-collection', props.id)
                         hide()
                       }
                     "
@@ -184,25 +238,29 @@
 </template>
 
 <script setup lang="ts">
-import IconCheckCircle from "~icons/lucide/check-circle"
-import IconFolderPlus from "~icons/lucide/folder-plus"
-import IconFilePlus from "~icons/lucide/file-plus"
-import IconMoreVertical from "~icons/lucide/more-vertical"
-import IconDownload from "~icons/lucide/download"
-import IconTrash2 from "~icons/lucide/trash-2"
-import IconEdit from "~icons/lucide/edit"
-import IconFolder from "~icons/lucide/folder"
-import IconFolderOpen from "~icons/lucide/folder-open"
-import { ref, computed, watch } from "vue"
-import { HoppCollection, HoppRESTRequest } from "@hoppscotch/data"
 import { useI18n } from "@composables/i18n"
+import { HoppCollection } from "@hoppscotch/data"
+import { computed, ref, watch } from "vue"
 import { TippyComponent } from "vue-tippy"
+import { useReadonlyStream } from "~/composables/stream"
 import { TeamCollection } from "~/helpers/teams/TeamCollection"
 import {
   changeCurrentReorderStatus,
   currentReorderingStatus$,
 } from "~/newstore/reordering"
-import { useReadonlyStream } from "~/composables/stream"
+import { platform } from "~/platform"
+import IconCheckCircle from "~icons/lucide/check-circle"
+import IconCopy from "~icons/lucide/copy"
+import IconDownload from "~icons/lucide/download"
+import IconEdit from "~icons/lucide/edit"
+import IconFilePlus from "~icons/lucide/file-plus"
+import IconFolder from "~icons/lucide/folder"
+import IconFolderOpen from "~icons/lucide/folder-open"
+import IconFolderPlus from "~icons/lucide/folder-plus"
+import IconMoreVertical from "~icons/lucide/more-vertical"
+import IconPlaySquare from "~icons/lucide/play-square"
+import IconSettings2 from "~icons/lucide/settings-2"
+import IconTrash2 from "~icons/lucide/trash-2"
 
 type CollectionType = "my-collections" | "team-collections"
 type FolderType = "collection" | "folder"
@@ -213,7 +271,7 @@ const props = withDefaults(
   defineProps<{
     id: string
     parentID?: string | null
-    data: HoppCollection<HoppRESTRequest> | TeamCollection
+    data: HoppCollection | TeamCollection
     /**
      * Collection component can be used for both collections and folders.
      * folderType is used to determine which one it is.
@@ -226,6 +284,7 @@ const props = withDefaults(
     hasNoTeamAccess?: boolean
     collectionMoveLoading?: string[]
     isLastItem?: boolean
+    duplicateCollectionLoading?: boolean
   }>(),
   {
     id: "",
@@ -237,6 +296,7 @@ const props = withDefaults(
     exportLoading: false,
     hasNoTeamAccess: false,
     isLastItem: false,
+    duplicateLoading: false,
   }
 )
 
@@ -245,6 +305,8 @@ const emit = defineEmits<{
   (event: "add-request"): void
   (event: "add-folder"): void
   (event: "edit-collection"): void
+  (event: "edit-properties"): void
+  (event: "duplicate-collection"): void
   (event: "export-data"): void
   (event: "remove-collection"): void
   (event: "drop-event", payload: DataTransfer): void
@@ -252,15 +314,19 @@ const emit = defineEmits<{
   (event: "dragging", payload: boolean): void
   (event: "update-collection-order", payload: DataTransfer): void
   (event: "update-last-collection-order", payload: DataTransfer): void
+  (event: "run-collection", collectionID: string): void
 }>()
 
-const tippyActions = ref<TippyComponent | null>(null)
+const tippyActions = ref<HTMLDivElement | null>(null)
 const requestAction = ref<HTMLButtonElement | null>(null)
 const folderAction = ref<HTMLButtonElement | null>(null)
 const edit = ref<HTMLButtonElement | null>(null)
+const duplicateAction = ref<HTMLButtonElement | null>(null)
 const deleteAction = ref<HTMLButtonElement | null>(null)
 const exportAction = ref<HTMLButtonElement | null>(null)
 const options = ref<TippyComponent | null>(null)
+const propertiesAction = ref<HTMLButtonElement | null>(null)
+const runCollectionAction = ref<HTMLButtonElement | null>(null)
 
 const dragging = ref(false)
 const ordering = ref(false)
@@ -272,6 +338,11 @@ const currentReorderingStatus = useReadonlyStream(currentReorderingStatus$, {
   id: "",
   parentID: "",
 })
+
+const currentUser = useReadonlyStream(
+  platform.auth.getCurrentUserStream(),
+  platform.auth.getCurrentUser()
+)
 
 // Used to determine if the collection is being dragged to a different destination
 // This is used to make the highlight effect work
@@ -290,20 +361,35 @@ const collectionIcon = computed(() => {
   if (props.isSelected) return IconCheckCircle
   else if (!props.isOpen) return IconFolder
   else if (props.isOpen) return IconFolderOpen
-  else return IconFolder
+  return IconFolder
 })
 
 const collectionName = computed(() => {
-  if ((props.data as HoppCollection<HoppRESTRequest>).name)
-    return (props.data as HoppCollection<HoppRESTRequest>).name
-  else return (props.data as TeamCollection).title
+  if ((props.data as HoppCollection).name)
+    return (props.data as HoppCollection).name
+  return (props.data as TeamCollection).title
+})
+
+const showDuplicateCollectionAction = computed(() => {
+  // Show if the user is not logged in
+  if (!currentUser.value) {
+    return true
+  }
+
+  if (props.collectionsType === "team-collections") {
+    return true
+  }
+
+  // Duplicate collection action is disabled on SH until the issue with syncing is resolved
+  return !platform.platformFeatureFlags
+    .duplicateCollectionDisabledInPersonalWorkspace
 })
 
 watch(
-  () => props.exportLoading,
-  (val) => {
-    if (!val) {
-      options.value!.tippy.hide()
+  () => [props.exportLoading, props.duplicateCollectionLoading],
+  ([newExportLoadingVal, newDuplicateCollectionLoadingVal]) => {
+    if (!newExportLoadingVal && !newDuplicateCollectionLoadingVal) {
+      options.value!.tippy?.hide()
     }
   }
 )
@@ -424,9 +510,8 @@ const isCollLoading = computed(() => {
     props.data.id
   ) {
     return collectionMoveLoading.includes(props.data.id)
-  } else {
-    return false
   }
+  return false
 })
 
 const resetDragState = () => {

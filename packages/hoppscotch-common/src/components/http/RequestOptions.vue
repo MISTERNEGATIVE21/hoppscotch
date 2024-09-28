@@ -5,30 +5,52 @@
     render-inactive-tabs
   >
     <HoppSmartTab
+      v-if="properties?.includes('params') ?? true"
       :id="'params'"
       :label="`${t('tab.parameters')}`"
-      :info="`${newActiveParamsCount$}`"
+      :info="`${newActiveParamsCount}`"
     >
-      <HttpParameters v-model="request.params" />
+      <HttpParameters v-model="request.params" :envs="envs" />
     </HoppSmartTab>
-    <HoppSmartTab :id="'bodyParams'" :label="`${t('tab.body')}`">
+    <HoppSmartTab
+      v-if="properties?.includes('bodyParams') ?? true"
+      :id="'bodyParams'"
+      :label="`${t('tab.body')}`"
+      :indicator="isBodyFilled"
+    >
       <HttpBody
         v-model:headers="request.headers"
         v-model:body="request.body"
+        :envs="envs"
         @change-tab="changeOptionTab"
       />
     </HoppSmartTab>
     <HoppSmartTab
+      v-if="properties?.includes('headers') ?? true"
       :id="'headers'"
       :label="`${t('tab.headers')}`"
-      :info="`${newActiveHeadersCount$}`"
+      :info="`${newActiveHeadersCount}`"
     >
-      <HttpHeaders v-model="request" @change-tab="changeOptionTab" />
-    </HoppSmartTab>
-    <HoppSmartTab :id="'authorization'" :label="`${t('tab.authorization')}`">
-      <HttpAuthorization v-model="request.auth" />
+      <HttpHeaders
+        v-model="request"
+        :inherited-properties="inheritedProperties"
+        :envs="envs"
+        @change-tab="changeOptionTab"
+      />
     </HoppSmartTab>
     <HoppSmartTab
+      v-if="properties?.includes('authorization') ?? true"
+      :id="'authorization'"
+      :label="`${t('tab.authorization')}`"
+    >
+      <HttpAuthorization
+        v-model="request.auth"
+        :inherited-properties="inheritedProperties"
+        :envs="envs"
+      />
+    </HoppSmartTab>
+    <HoppSmartTab
+      v-if="properties?.includes('preRequestScript') ?? true"
       :id="'preRequestScript'"
       :label="`${t('tab.pre_request_script')}`"
       :indicator="
@@ -40,6 +62,7 @@
       <HttpPreRequestScript v-model="request.preRequestScript" />
     </HoppSmartTab>
     <HoppSmartTab
+      v-if="properties?.includes('tests') ?? true"
       :id="'tests'"
       :label="`${t('tab.tests')}`"
       :indicator="
@@ -47,6 +70,15 @@
       "
     >
       <HttpTests v-model="request.testScript" />
+    </HoppSmartTab>
+    <HoppSmartTab
+      v-if="properties?.includes('requestVariables') ?? true"
+      :id="'requestVariables'"
+      :label="`${t('tab.variables')}`"
+      :info="`${newActiveRequestVariablesCount}`"
+      :align-last="true"
+    >
+      <HttpRequestVariables v-model="request.requestVariables" />
     </HoppSmartTab>
   </HoppSmartTabs>
 </template>
@@ -57,6 +89,8 @@ import { HoppRESTRequest } from "@hoppscotch/data"
 import { useVModel } from "@vueuse/core"
 import { computed } from "vue"
 import { defineActionHandler } from "~/helpers/actions"
+import { HoppInheritedProperty } from "~/helpers/types/HoppInheritedProperties"
+import { AggregateEnvironment } from "~/newstore/environments"
 
 const VALID_OPTION_TABS = [
   "params",
@@ -65,6 +99,7 @@ const VALID_OPTION_TABS = [
   "authorization",
   "preRequestScript",
   "tests",
+  "requestVariables",
 ] as const
 
 export type RESTOptionTabs = (typeof VALID_OPTION_TABS)[number]
@@ -76,6 +111,9 @@ const props = withDefaults(
   defineProps<{
     modelValue: HoppRESTRequest
     optionTab: RESTOptionTabs
+    properties?: string[]
+    inheritedProperties?: HoppInheritedProperty
+    envs?: AggregateEnvironment[]
   }>(),
   {
     optionTab: "params",
@@ -94,22 +132,31 @@ const changeOptionTab = (e: RESTOptionTabs) => {
   selectedOptionTab.value = e
 }
 
-const newActiveParamsCount$ = computed(() => {
-  const e = request.value.params.filter(
-    (x) => x.active && (x.key !== "" || x.value !== "")
+const newActiveParamsCount = computed(() => {
+  const count = request.value.params.filter(
+    (x) => x.active && (x.key || x.value)
   ).length
 
-  if (e === 0) return null
-  return `${e}`
+  return count ? count : null
 })
 
-const newActiveHeadersCount$ = computed(() => {
-  const e = request.value.headers.filter(
-    (x) => x.active && (x.key !== "" || x.value !== "")
+const newActiveHeadersCount = computed(() => {
+  const count = request.value.headers.filter(
+    (x) => x.active && (x.key || x.value)
   ).length
 
-  if (e === 0) return null
-  return `${e}`
+  return count ? count : null
+})
+
+const newActiveRequestVariablesCount = computed(() => {
+  const count = request.value.requestVariables.filter(
+    (x) => x.active && (x.key || x.value)
+  ).length
+  return count ? count : null
+})
+
+const isBodyFilled = computed(() => {
+  return Boolean(request.value.body.body && request.value.body.body.length > 0)
 })
 
 defineActionHandler("request.open-tab", ({ tab }) => {

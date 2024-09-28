@@ -1,7 +1,7 @@
 <template>
   <div>
     <div
-      class="sticky z-10 flex justify-between flex-1 flex-shrink-0 overflow-x-auto border-b top-upperPrimaryStickyFold border-dividerLight bg-primary"
+      class="sticky top-upperPrimaryStickyFold z-10 flex flex-1 flex-shrink-0 justify-between overflow-x-auto border-b border-dividerLight bg-primary"
     >
       <HoppButtonSecondary
         :icon="IconPlus"
@@ -26,49 +26,52 @@
       </div>
     </div>
     <EnvironmentsMyEnvironment
-      v-for="(environment, index) in environments"
+      v-for="{ env, index } in alphabeticallySortedPersonalEnvironments"
       :key="`environment-${index}`"
       :environment-index="index"
-      :environment="environment"
+      :environment="env"
       @edit-environment="editEnvironment(index)"
     />
     <HoppSmartPlaceholder
-      v-if="!environments.length"
+      v-if="!alphabeticallySortedPersonalEnvironments.length"
       :src="`/images/states/${colorMode.value}/blockchain.svg`"
       :alt="`${t('empty.environments')}`"
       :text="t('empty.environments')"
     >
-      <div class="flex flex-col items-center space-y-4">
-        <span class="text-secondaryLight text-center">
-          {{ t("environment.import_or_create") }}
-        </span>
-        <div class="flex gap-4 flex-col items-stretch">
-          <HoppButtonPrimary
-            :icon="IconImport"
-            :label="t('import.title')"
-            filled
-            outline
-            @click="displayModalImportExport(true)"
-          />
-          <HoppButtonSecondary
-            :icon="IconPlus"
-            :label="`${t('add.new')}`"
-            filled
-            outline
-            @click="displayModalAdd(true)"
-          />
+      <template #body>
+        <div class="flex flex-col items-center space-y-4">
+          <span class="text-center text-secondaryLight">
+            {{ t("environment.import_or_create") }}
+          </span>
+          <div class="flex flex-col items-stretch gap-4">
+            <HoppButtonPrimary
+              :icon="IconImport"
+              :label="t('import.title')"
+              filled
+              outline
+              @click="displayModalImportExport(true)"
+            />
+            <HoppButtonSecondary
+              :icon="IconPlus"
+              :label="`${t('add.new')}`"
+              filled
+              outline
+              @click="displayModalAdd(true)"
+            />
+          </div>
         </div>
-      </div>
+      </template>
     </HoppSmartPlaceholder>
     <EnvironmentsMyDetails
       :show="showModalDetails"
       :action="action"
       :editing-environment-index="editingEnvironmentIndex"
       :editing-variable-name="editingVariableName"
+      :is-secret-option-selected="secretOptionSelected"
       @hide-modal="displayModalEdit(false)"
     />
     <EnvironmentsImportExport
-      :show="showModalImportExport"
+      v-if="showModalImportExport"
       environment-type="MY_ENV"
       @hide-modal="displayModalImportExport(false)"
     />
@@ -76,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue"
+import { ref, computed } from "vue"
 import { environments$ } from "~/newstore/environments"
 import { useColorMode } from "~/composables/theming"
 import { useReadonlyStream } from "@composables/stream"
@@ -84,19 +87,25 @@ import { useI18n } from "~/composables/i18n"
 import IconPlus from "~icons/lucide/plus"
 import IconImport from "~icons/lucide/folder-down"
 import IconHelpCircle from "~icons/lucide/help-circle"
-import { Environment } from "@hoppscotch/data"
 import { defineActionHandler } from "~/helpers/actions"
+import { sortPersonalEnvironmentsAlphabetically } from "~/helpers/utils/sortEnvironmentsAlphabetically"
 
 const t = useI18n()
 const colorMode = useColorMode()
 
 const environments = useReadonlyStream(environments$, [])
 
+// Sort environments alphabetically by default
+const alphabeticallySortedPersonalEnvironments = computed(() =>
+  sortPersonalEnvironmentsAlphabetically(environments.value, "asc")
+)
+
 const showModalImportExport = ref(false)
 const showModalDetails = ref(false)
 const action = ref<"new" | "edit">("edit")
 const editingEnvironmentIndex = ref<number | null>(null)
 const editingVariableName = ref("")
+const secretOptionSelected = ref(false)
 
 const displayModalAdd = (shouldDisplay: boolean) => {
   action.value = "new"
@@ -118,18 +127,22 @@ const editEnvironment = (environmentIndex: number) => {
 }
 const resetSelectedData = () => {
   editingEnvironmentIndex.value = null
+  editingVariableName.value = ""
+  secretOptionSelected.value = false
 }
 
 defineActionHandler(
   "modals.my.environment.edit",
-  ({ envName, variableName }) => {
+  ({ envName, variableName, isSecret }) => {
     if (variableName) editingVariableName.value = variableName
-    const envIndex: number = environments.value.findIndex(
-      (environment: Environment) => {
-        return environment.name === envName
-      }
-    )
-    if (envName !== "Global") editEnvironment(envIndex)
+    const envIndex: number =
+      alphabeticallySortedPersonalEnvironments.value.findIndex(({ env }) => {
+        return env.name === envName
+      })
+    if (envName !== "Global") {
+      editEnvironment(envIndex)
+      secretOptionSelected.value = isSecret ?? false
+    }
   }
 )
 </script>

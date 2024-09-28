@@ -1,12 +1,12 @@
 <template>
   <div
     v-if="response.type === 'success' || response.type === 'fail'"
-    class="flex flex-col flex-1"
+    class="flex flex-1 flex-col"
   >
     <div
-      class="sticky z-10 flex items-center justify-between flex-shrink-0 pl-4 overflow-x-auto border-b bg-primary border-dividerLight top-lowerSecondaryStickyFold"
+      class="sticky top-lowerSecondaryStickyFold z-10 flex flex-shrink-0 items-center justify-between overflow-x-auto border-b border-dividerLight bg-primary pl-4"
     >
-      <label class="font-semibold truncate text-secondaryLight">
+      <label class="truncate font-semibold text-secondaryLight">
         {{ t("response.body") }}
       </label>
       <div class="flex items-center">
@@ -14,9 +14,9 @@
           v-if="response.body"
           v-tippy="{ theme: 'tooltip' }"
           :title="t('state.linewrap')"
-          :class="{ '!text-accent': linewrapEnabled }"
+          :class="{ '!text-accent': WRAP_LINES }"
           :icon="IconWrapText"
-          @click.prevent="linewrapEnabled = !linewrapEnabled"
+          @click.prevent="toggleNestedSetting('WRAP_LINES', 'httpResponseBody')"
         />
         <HoppButtonSecondary
           v-if="response.body"
@@ -44,17 +44,49 @@
           :icon="copyIcon"
           @click="copyResponse"
         />
+        <tippy
+          v-if="response.body"
+          interactive
+          trigger="click"
+          theme="popover"
+          :on-shown="() => copyInterfaceTippyActions.focus()"
+        >
+          <HoppButtonSecondary
+            v-tippy="{ theme: 'tooltip' }"
+            :title="t('action.more')"
+            :icon="IconMore"
+          />
+          <template #content="{ hide }">
+            <div
+              ref="copyInterfaceTippyActions"
+              class="flex flex-col focus:outline-none"
+              tabindex="0"
+              @keyup.escape="hide()"
+            >
+              <HoppSmartItem
+                :label="t('response.generate_data_schema')"
+                :icon="IconNetwork"
+                @click="
+                  () => {
+                    invokeAction('response.schema.toggle')
+                    hide()
+                  }
+                "
+              />
+            </div>
+          </template>
+        </tippy>
       </div>
     </div>
     <div
       v-if="toggleFilter"
-      class="sticky z-10 flex flex-shrink-0 overflow-x-auto border-b bg-primary top-lowerTertiaryStickyFold border-dividerLight"
+      class="sticky top-lowerTertiaryStickyFold z-10 flex flex-shrink-0 overflow-x-auto border-b border-dividerLight bg-primary"
     >
       <div
-        class="inline-flex items-center flex-1 bg-primaryLight border-divider text-secondaryDark"
+        class="inline-flex flex-1 items-center border-divider bg-primaryLight text-secondaryDark"
       >
-        <span class="inline-flex items-center flex-1 px-4">
-          <icon-lucide-search class="w-4 h-4 text-secondaryLight" />
+        <span class="inline-flex flex-1 items-center px-4">
+          <icon-lucide-search class="h-4 w-4 text-secondaryLight" />
           <input
             v-model="filterQueryText"
             v-focus
@@ -65,7 +97,7 @@
         </span>
         <div
           v-if="filterResponseError"
-          class="flex items-center justify-center px-2 py-1 rounded text-tiny text-accentContrast"
+          class="flex items-center justify-center rounded px-2 py-1 text-tiny text-accentContrast"
           :class="{
             'bg-red-500':
               filterResponseError.type === 'JSON_PARSE_FAILED' ||
@@ -86,14 +118,12 @@
         />
       </div>
     </div>
-    <div
-      ref="jsonResponse"
-      class="flex flex-col flex-1 h-auto h-full"
-      :class="toggleFilter ? 'responseToggleOn' : 'responseToggleOff'"
-    ></div>
+    <div class="h-full relative overflow-auto flex flex-col flex-1">
+      <div ref="jsonResponse" class="absolute inset-0 h-full"></div>
+    </div>
     <div
       v-if="outlinePath"
-      class="sticky bottom-0 z-10 flex flex-shrink-0 px-2 overflow-auto overflow-x-auto border-t bg-primaryLight border-dividerLight flex-nowrap"
+      class="sticky bottom-0 z-10 flex flex-shrink-0 flex-nowrap overflow-auto overflow-x-auto border-t border-dividerLight bg-primaryLight px-2"
     >
       <div
         v-for="(item, index) in outlinePath"
@@ -191,7 +221,7 @@
         </tippy>
         <icon-lucide-chevron-right
           v-if="index + 1 !== outlinePath.length"
-          class="opacity-50 text-secondaryLight svg-icons"
+          class="svg-icons text-secondaryLight opacity-50"
         />
       </div>
     </div>
@@ -201,7 +231,9 @@
 <script setup lang="ts">
 import IconWrapText from "~icons/lucide/wrap-text"
 import IconFilter from "~icons/lucide/filter"
+import IconMore from "~icons/lucide/more-horizontal"
 import IconHelpCircle from "~icons/lucide/help-circle"
+import IconNetwork from "~icons/lucide/network"
 import * as LJSON from "lossless-json"
 import * as O from "fp-ts/Option"
 import * as E from "fp-ts/Either"
@@ -222,8 +254,10 @@ import {
   useResponseBody,
   useDownloadResponse,
 } from "@composables/lens-actions"
-import { defineActionHandler } from "~/helpers/actions"
+import { defineActionHandler, invokeAction } from "~/helpers/actions"
 import { getPlatformSpecialKey as getSpecialKey } from "~/helpers/platformutils"
+import { useNestedSetting } from "~/composables/settings"
+import { toggleNestedSetting } from "~/newstore/settings"
 
 const t = useI18n()
 
@@ -259,8 +293,8 @@ const jsonResponseBodyText = computed(() => {
           () =>
             JSONPath({
               path: filterQueryText.value,
-              json: parsedJSON,
-            }) as undefined,
+              json: parsedJSON as any,
+            }),
           (err): BodyParseError => ({
             type: "JSON_PATH_QUERY_FAILED",
             error: err as Error,
@@ -269,9 +303,8 @@ const jsonResponseBodyText = computed(() => {
       ),
       E.map(JSON.stringify)
     )
-  } else {
-    return E.right(responseBodyText.value)
   }
+  return E.right(responseBodyText.value)
 })
 
 const jsonBodyText = computed(() =>
@@ -321,13 +354,17 @@ const filterResponseError = computed(() =>
 const { copyIcon, copyResponse } = useCopyResponse(jsonBodyText)
 const { downloadIcon, downloadResponse } = useDownloadResponse(
   "application/json",
-  jsonBodyText
+  jsonBodyText,
+  t("filename.lens", {
+    request_name: props.response.req.name,
+  })
 )
 
 // Template refs
 const tippyActions = ref<any | null>(null)
 const jsonResponse = ref<any | null>(null)
-const linewrapEnabled = ref(true)
+const WRAP_LINES = useNestedSetting("WRAP_LINES", "httpResponseBody")
+const copyInterfaceTippyActions = ref<any | null>(null)
 
 const { cursor } = useCodemirror(
   jsonResponse,
@@ -336,7 +373,7 @@ const { cursor } = useCodemirror(
     extendedEditorConfig: {
       mode: "application/ld+json",
       readOnly: true,
-      lineWrapping: linewrapEnabled,
+      lineWrapping: WRAP_LINES,
     },
     linter: null,
     completer: null,
@@ -376,21 +413,13 @@ defineActionHandler("response.copy", () => copyResponse())
 <style lang="scss" scoped>
 .outline-item {
   @apply cursor-pointer;
-  @apply flex-grow-0 flex-shrink-0;
+  @apply flex-shrink-0 flex-grow-0;
   @apply text-secondaryLight;
   @apply inline-flex;
   @apply items-center;
   @apply px-2;
   @apply py-1;
   @apply transition;
-  @apply hover: text-secondary;
-}
-
-:deep(.responseToggleOff .cm-panels) {
-  @apply top-lowerTertiaryStickyFold #{!important};
-}
-
-:deep(.responseToggleOn .cm-panels) {
-  @apply top-lowerFourthStickyFold #{!important};
+  @apply hover:text-secondary;
 }
 </style>

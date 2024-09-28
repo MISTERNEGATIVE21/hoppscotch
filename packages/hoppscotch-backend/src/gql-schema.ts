@@ -27,6 +27,9 @@ import { UserRequestUserCollectionResolver } from './user-request/resolvers/user
 import { UserEnvsUserResolver } from './user-environment/user.resolver';
 import { UserHistoryUserResolver } from './user-history/user.resolver';
 import { UserSettingsUserResolver } from './user-settings/user.resolver';
+import { InfraResolver } from './admin/infra.resolver';
+import { InfraConfigResolver } from './infra-config/infra-config.resolver';
+import { InfraTokenResolver } from './infra-token/infra-token.resolver';
 
 /**
  * All the resolvers present in the application.
@@ -34,6 +37,7 @@ import { UserSettingsUserResolver } from './user-settings/user.resolver';
  * NOTE: This needs to be KEPT UP-TO-DATE to keep the schema accurate
  */
 const RESOLVERS = [
+  InfraResolver,
   AdminResolver,
   ShortcodeResolver,
   TeamResolver,
@@ -56,6 +60,8 @@ const RESOLVERS = [
   UserRequestUserCollectionResolver,
   UserSettingsResolver,
   UserSettingsUserResolver,
+  InfraConfigResolver,
+  InfraTokenResolver,
 ];
 
 /**

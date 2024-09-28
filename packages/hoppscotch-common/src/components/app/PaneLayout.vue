@@ -1,27 +1,28 @@
 <template>
   <Splitpanes
-    class="smart-splitter"
     :rtl="SIDEBAR_ON_LEFT && mdAndLarger"
     :class="{
       '!flex-row-reverse': SIDEBAR_ON_LEFT && mdAndLarger,
+      'smart-splitter': SIDEBAR && hasSidebar,
+      'no-splitter': !(SIDEBAR && hasSidebar),
     }"
     :horizontal="!mdAndLarger"
     @resize="setPaneEvent($event, 'vertical')"
   >
     <Pane
-      :size="PANE_MAIN_SIZE"
+      :size="SIDEBAR && hasSidebar ? PANE_MAIN_SIZE : 100"
       min-size="65"
       class="flex flex-col !overflow-auto"
     >
       <Splitpanes
         class="smart-splitter"
-        :horizontal="COLUMN_LAYOUT"
+        :horizontal="COLUMN_LAYOUT || forceColumnLayout"
         @resize="setPaneEvent($event, 'horizontal')"
       >
         <Pane
           :size="PANE_MAIN_TOP_SIZE"
           class="flex flex-col !overflow-auto"
-          min-size="25"
+          :min-size="isEmbed ? 12 : 25"
         >
           <slot name="primary" />
         </Pane>
@@ -36,9 +37,8 @@
       </Splitpanes>
     </Pane>
     <Pane
-      v-if="SIDEBAR && hasSidebar"
-      :size="PANE_SIDEBAR_SIZE"
-      min-size="25"
+      :size="SIDEBAR && hasSidebar ? PANE_SIDEBAR_SIZE : 0"
+      :min-size="25"
       class="flex flex-col !overflow-auto bg-primaryContrast"
     >
       <slot name="sidebar" />
@@ -47,14 +47,15 @@
 </template>
 
 <script setup lang="ts">
-import { Splitpanes, Pane } from "splitpanes"
+import { Pane, Splitpanes } from "splitpanes"
 
 import "splitpanes/dist/splitpanes.css"
 
-import { breakpointsTailwind, useBreakpoints } from "@vueuse/core"
-import { computed, useSlots, ref } from "vue"
 import { useSetting } from "@composables/settings"
-import { setLocalConfig, getLocalConfig } from "~/newstore/localpersistence"
+import { breakpointsTailwind, useBreakpoints } from "@vueuse/core"
+import { useService } from "dioc/vue"
+import { computed, ref, useSlots } from "vue"
+import { PersistenceService } from "~/services/persistence"
 
 const SIDEBAR_ON_LEFT = useSetting("SIDEBAR_ON_LEFT")
 
@@ -67,6 +68,8 @@ const SIDEBAR = useSetting("SIDEBAR")
 
 const slots = useSlots()
 
+const persistenceService = useService(PersistenceService)
+
 const hasSidebar = computed(() => !!slots.sidebar)
 const hasSecondary = computed(() => !!slots.secondary)
 
@@ -74,6 +77,14 @@ const props = defineProps({
   layoutId: {
     type: String,
     default: null,
+  },
+  isEmbed: {
+    type: Boolean,
+    defaul: false,
+  },
+  forceColumnLayout: {
+    type: Boolean,
+    default: false,
   },
 })
 
@@ -96,7 +107,7 @@ if (!COLUMN_LAYOUT.value) {
 function setPaneEvent(event: PaneEvent[], type: "vertical" | "horizontal") {
   if (!props.layoutId) return
   const storageKey = `${props.layoutId}-pane-config-${type}`
-  setLocalConfig(storageKey, JSON.stringify(event))
+  persistenceService.setLocalConfig(storageKey, JSON.stringify(event))
 }
 
 function populatePaneEvent() {
@@ -119,7 +130,7 @@ function populatePaneEvent() {
 
 function getPaneData(type: "vertical" | "horizontal"): PaneEvent[] | null {
   const storageKey = `${props.layoutId}-pane-config-${type}`
-  const paneEvent = getLocalConfig(storageKey)
+  const paneEvent = persistenceService.getLocalConfig(storageKey)
   if (!paneEvent) return null
   return JSON.parse(paneEvent)
 }

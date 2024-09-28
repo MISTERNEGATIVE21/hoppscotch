@@ -12,6 +12,7 @@ import {
   USER_NOT_FOUND,
   USER_NOT_OWNER,
   USER_COLL_INVALID_JSON,
+  USER_COLL_DATA_INVALID,
 } from 'src/errors';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AuthUser } from 'src/types/AuthUser';
@@ -24,7 +25,11 @@ import {
   UserCollectionExportJSONData,
 } from './user-collections.model';
 import { ReqType } from 'src/types/RequestTypes';
-import { isValidLength, stringToJson } from 'src/utils';
+import {
+  isValidLength,
+  stringToJson,
+  transformCollectionData,
+} from 'src/utils';
 import { CollectionFolder } from 'src/types/CollectionFolder';
 
 @Injectable()
@@ -42,9 +47,15 @@ export class UserCollectionService {
    * @returns UserCollection model
    */
   private cast(collection: UserCollection) {
+    const data = transformCollectionData(collection.data);
+
     return <UserCollectionModel>{
-      ...collection,
+      id: collection.id,
+      title: collection.title,
+      type: collection.type,
+      parentID: collection.parentID,
       userID: collection.userUid,
+      data,
     };
   }
 
@@ -146,7 +157,7 @@ export class UserCollectionService {
       },
     });
 
-    return parent;
+    return !parent ? null : this.cast(parent);
   }
 
   /**
@@ -164,7 +175,7 @@ export class UserCollectionService {
     take: number,
     type: ReqType,
   ) {
-    return this.prisma.userCollection.findMany({
+    const res = await this.prisma.userCollection.findMany({
       where: {
         parentID: collectionID,
         type: type,
@@ -176,6 +187,12 @@ export class UserCollectionService {
       skip: cursor ? 1 : 0,
       cursor: cursor ? { id: cursor } : undefined,
     });
+
+    const childCollections = res.map((childCollection) =>
+      this.cast(childCollection),
+    );
+
+    return childCollections;
   }
 
   /**
@@ -211,11 +228,19 @@ export class UserCollectionService {
   async createUserCollection(
     user: AuthUser,
     title: string,
+    data: string | null = null,
     parentUserCollectionID: string | null,
     type: ReqType,
   ) {
     const isTitleValid = isValidLength(title, this.TITLE_LENGTH);
     if (!isTitleValid) return E.left(USER_COLL_SHORT_TITLE);
+
+    if (data === '') return E.left(USER_COLL_DATA_INVALID);
+    if (data) {
+      const jsonReq = stringToJson(data);
+      if (E.isLeft(jsonReq)) return E.left(USER_COLL_DATA_INVALID);
+      data = jsonReq.right;
+    }
 
     // If creating a child collection
     if (parentUserCollectionID !== null) {
@@ -251,15 +276,19 @@ export class UserCollectionService {
           },
         },
         parent: isParent,
+        data: data ?? undefined,
         orderIndex: !parentUserCollectionID
           ? (await this.getRootCollectionsCount(user.uid)) + 1
           : (await this.getChildCollectionsCount(parentUserCollectionID)) + 1,
       },
     });
 
-    await this.pubsub.publish(`user_coll/${user.uid}/created`, userCollection);
+    await this.pubsub.publish(
+      `user_coll/${user.uid}/created`,
+      this.cast(userCollection),
+    );
 
-    return E.right(userCollection);
+    return E.right(this.cast(userCollection));
   }
 
   /**
@@ -276,7 +305,7 @@ export class UserCollectionService {
     take: number,
     type: ReqType,
   ) {
-    return this.prisma.userCollection.findMany({
+    const res = await this.prisma.userCollection.findMany({
       where: {
         userUid: user.uid,
         parentID: null,
@@ -289,6 +318,12 @@ export class UserCollectionService {
       skip: cursor ? 1 : 0,
       cursor: cursor ? { id: cursor } : undefined,
     });
+
+    const userCollections = res.map((childCollection) =>
+      this.cast(childCollection),
+    );
+
+    return userCollections;
   }
 
   /**
@@ -307,7 +342,7 @@ export class UserCollectionService {
     take: number,
     type: ReqType,
   ) {
-    return this.prisma.userCollection.findMany({
+    const res = await this.prisma.userCollection.findMany({
       where: {
         userUid: user.uid,
         parentID: userCollectionID,
@@ -317,9 +352,16 @@ export class UserCollectionService {
       skip: cursor ? 1 : 0,
       cursor: cursor ? { id: cursor } : undefined,
     });
+
+    const childCollections = res.map((childCollection) =>
+      this.cast(childCollection),
+    );
+
+    return childCollections;
   }
 
   /**
+   * @deprecated Use updateUserCollection method instead
    * Update the title of a UserCollection
    *
    * @param newTitle The new title of collection
@@ -351,10 +393,10 @@ export class UserCollectionService {
 
       this.pubsub.publish(
         `user_coll/${updatedUserCollection.userUid}/updated`,
-        updatedUserCollection,
+        this.cast(updatedUserCollection),
       );
 
-      return E.right(updatedUserCollection);
+      return E.right(this.cast(updatedUserCollection));
     } catch (error) {
       return E.left(USER_COLL_NOT_FOUND);
     }
@@ -591,10 +633,10 @@ export class UserCollectionService {
 
       this.pubsub.publish(
         `user_coll/${collection.right.userUid}/moved`,
-        updatedCollection.right,
+        this.cast(updatedCollection.right),
       );
 
-      return E.right(updatedCollection.right);
+      return E.right(this.cast(updatedCollection.right));
     }
 
     // destCollectionID != null i.e move into another collection
@@ -642,10 +684,10 @@ export class UserCollectionService {
 
     this.pubsub.publish(
       `user_coll/${collection.right.userUid}/moved`,
-      updatedCollection.right,
+      this.cast(updatedCollection.right),
     );
 
-    return E.right(updatedCollection.right);
+    return E.right(this.cast(updatedCollection.right));
   }
 
   /**
@@ -835,6 +877,8 @@ export class UserCollectionService {
       },
     });
 
+    const data = transformCollectionData(collection.right.data);
+
     const result: CollectionFolder = {
       id: collection.right.id,
       name: collection.right.title,
@@ -846,6 +890,7 @@ export class UserCollectionService {
           ...(x.request as Record<string, unknown>), // type casting x.request of type Prisma.JSONValue to an object to enable spread
         };
       }),
+      data,
     };
 
     return E.right(result);
@@ -918,6 +963,7 @@ export class UserCollectionService {
               ...(x.request as Record<string, unknown>), // type casting x.request of type Prisma.JSONValue to an object to enable spread
             };
           }),
+          data: JSON.stringify(parentCollection.right.data),
         }),
         collectionType: parentCollection.right.type,
       });
@@ -971,6 +1017,7 @@ export class UserCollectionService {
           this.generatePrismaQueryObj(f, userID, index + 1, reqType),
         ),
       },
+      data: folder.data ?? undefined,
     };
   }
 
@@ -1040,9 +1087,103 @@ export class UserCollectionService {
       ),
     );
 
-    userCollections.forEach((x) =>
-      this.pubsub.publish(`user_coll/${userID}/created`, x),
+    userCollections.forEach((collection) =>
+      this.pubsub.publish(`user_coll/${userID}/created`, this.cast(collection)),
     );
+
+    return E.right(true);
+  }
+
+  /**
+   * Update a UserCollection
+   *
+   * @param newTitle The new title of collection
+   * @param userCollectionID The Collection Id
+   * @param userID The User UID
+   * @returns An Either of the updated UserCollection
+   */
+  async updateUserCollection(
+    newTitle: string = null,
+    collectionData: string | null = null,
+    userCollectionID: string,
+    userID: string,
+  ) {
+    if (collectionData === '') return E.left(USER_COLL_DATA_INVALID);
+
+    if (collectionData) {
+      const jsonReq = stringToJson(collectionData);
+      if (E.isLeft(jsonReq)) return E.left(USER_COLL_DATA_INVALID);
+      collectionData = jsonReq.right;
+    }
+
+    if (newTitle != null) {
+      const isTitleValid = isValidLength(newTitle, this.TITLE_LENGTH);
+      if (!isTitleValid) return E.left(USER_COLL_SHORT_TITLE);
+    }
+
+    // Check to see is the collection belongs to the user
+    const isOwner = await this.isOwnerCheck(userCollectionID, userID);
+    if (O.isNone(isOwner)) return E.left(USER_NOT_OWNER);
+
+    try {
+      const updatedUserCollection = await this.prisma.userCollection.update({
+        where: {
+          id: userCollectionID,
+        },
+        data: {
+          data: collectionData ?? undefined,
+          title: newTitle ?? undefined,
+        },
+      });
+
+      this.pubsub.publish(
+        `user_coll/${updatedUserCollection.userUid}/updated`,
+        this.cast(updatedUserCollection),
+      );
+
+      return E.right(this.cast(updatedUserCollection));
+    } catch (error) {
+      return E.left(USER_COLL_NOT_FOUND);
+    }
+  }
+
+  /**
+   * Duplicate a User Collection
+   *
+   * @param collectionID The Collection ID
+   * @returns Boolean of duplication status
+   */
+  async duplicateUserCollection(
+    collectionID: string,
+    userID: string,
+    reqType: DBReqType,
+  ) {
+    const collection = await this.getUserCollection(collectionID);
+    if (E.isLeft(collection)) return E.left(USER_COLL_NOT_FOUND);
+
+    if (collection.right.userUid !== userID) return E.left(USER_NOT_OWNER);
+    if (collection.right.type !== reqType)
+      return E.left(USER_COLL_NOT_SAME_TYPE);
+
+    const collectionJSONObject = await this.exportUserCollectionToJSONObject(
+      collection.right.userUid,
+      collectionID,
+    );
+    if (E.isLeft(collectionJSONObject))
+      return E.left(collectionJSONObject.left);
+
+    const result = await this.importCollectionsFromJSON(
+      JSON.stringify([
+        {
+          ...collectionJSONObject.right,
+          name: `${collection.right.title} - Duplicate`,
+        },
+      ]),
+      userID,
+      collection.right.parentID,
+      reqType,
+    );
+    if (E.isLeft(result)) return E.left(result.left as string);
 
     return E.right(true);
   }
